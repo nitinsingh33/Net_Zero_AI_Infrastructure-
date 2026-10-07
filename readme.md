@@ -21,6 +21,36 @@ The system continuously measures the resulting energy and carbon impact and enfo
 
 ---
 
+# 🚀 Quick Start
+
+Get CarbonGate up and running in a few minutes:
+
+### Prerequisites
+- **Python 3.11+**
+- **Node.js 18+**
+
+### 1. Environment Setup
+Create a `.env` file in the `server` directory. Configure at least one AI provider (the rest can be left blank):
+```env
+# 1. Local Ollama (http://localhost:11434) - runs 100% locally and offline
+OLLAMA_HOST=http://localhost:11434
+
+# 2. Groq Cloud (Free, ultra-fast Llama)
+GROQ_API_KEY=your_key_here
+
+# 3. Google Gemini API (Free tier available)
+GEMINI_API_KEY=your_key_here
+```
+
+### 2. Run the Application
+The project includes automated startup scripts for Windows. Simply run:
+```bash
+.\start_all.bat
+```
+*(This will automatically install pip and npm dependencies and start both the backend on port 8000 and the frontend on port 5173).*
+
+---
+
 # 🚨 Problem Statement
 
 Modern AI applications often optimize for:
