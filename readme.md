@@ -705,27 +705,3 @@ That change in architecture is the core innovation.
 
 ---
 
-# 👥 Contributors
-
-| Name | Role |
-|---|---|
-| **Nitin Singh** | AI/ML & Backend Architecture |
-| **[Member 2]** | Frontend & UI |
-| **[Member 3]** | AI/ML & RAG |
-| **[Member 4]** | Research, Testing & Presentation |
-
-> Replace the placeholders with the final hackathon team members before submission.
-
----
-
-# 📌 Project Status
-
-**Hackathon Prototype — Greenovators 2026**
-
-The current implementation focuses on demonstrating the core CarbonGate architecture and its measurable impact on AI workload energy and carbon consumption.
-
----
-
-# 📄 License
-
-This project was developed as a hackathon prototype. Add the appropriate open-source license if the project is released publicly.
