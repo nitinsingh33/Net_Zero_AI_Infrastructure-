@@ -1,9 +1,11 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
   Leaf, LayoutDashboard, MessageSquare, BookOpen,
   Sliders, Zap, ChevronRight
 } from 'lucide-react';
 import './Layout.css';
+import { api } from '../../api/carbongate';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
@@ -15,10 +17,35 @@ const navItems = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
+  const [gridAvailable, setGridAvailable] = useState(false);
+
+  useEffect(() => {
+    const loadConnectionStatus = async () => {
+      try {
+        await api.health();
+        setBackendConnected(true);
+        const grid = await api.grid();
+        setGridAvailable(Boolean(grid.available));
+      } catch {
+        setBackendConnected(false);
+        setGridAvailable(false);
+      }
+    };
+
+    loadConnectionStatus();
+    const interval = window.setInterval(loadConnectionStatus, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const currentPage = navItems.find(n =>
     n.exact ? location.pathname === n.to : location.pathname.startsWith(n.to)
   );
+  const statusLabel = backendConnected === false
+    ? 'Backend unavailable'
+    : gridAvailable
+      ? 'Live grid monitoring'
+      : 'Backend connected · Grid data unavailable';
 
   return (
     <div className="layout">
@@ -55,8 +82,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Bottom status */}
         <div className="sidebar-footer">
           <div className="footer-badge">
-            <span className="footer-dot" />
-            <span>Live Monitoring</span>
+            <span className="footer-dot" style={{ background: gridAvailable ? undefined : backendConnected === false ? '#ef4444' : '#f97316' }} />
+            <span>{statusLabel}</span>
           </div>
           <div className="footer-version">v1.0.0 · Hackathon Build</div>
         </div>
@@ -77,8 +104,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <div className="topbar-right">
             <div className="live-indicator">
-              <span className="live-dot animate-pulse-green" />
-              <span>Live</span>
+              <span className={gridAvailable ? 'live-dot animate-pulse-green' : 'live-dot'} style={{ background: gridAvailable ? undefined : backendConnected === false ? '#ef4444' : '#f97316' }} />
+              <span>{gridAvailable ? 'Live' : backendConnected === false ? 'Offline' : 'Grid unavailable'}</span>
             </div>
           </div>
         </header>

@@ -219,14 +219,14 @@ export default function Dashboard() {
         <StatCard
           label="Total Energy"
           value={`${((stats?.total_energy_wh || 0)).toFixed(4)} Wh`}
-          sub="vs baseline savings"
+          sub="Measured workload energy"
           icon={Wind}
           color="purple"
         />
         <StatCard
           label="Total CO₂"
           value={`${((stats?.total_carbon_g || 0) / 1000).toFixed(4)} kg`}
-          sub="grams emitted"
+          sub="kg emitted"
           icon={TrendingDown}
           color="orange"
         />
@@ -245,7 +245,7 @@ export default function Dashboard() {
         <StatCard
           label="RAG Chunks"
           value={String(status?.rag_stats?.indexed_chunks || 0)}
-          sub="Amity knowledge base"
+          sub="Indexed knowledge chunks"
           icon={Cpu}
           color="purple"
         />
@@ -287,7 +287,7 @@ export default function Dashboard() {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-chart">No data yet — run some queries!</div>
+            <div className="empty-chart">No data yet — use the AI Helpdesk to create your first workload record.</div>
           )}
         </div>
 
@@ -327,7 +327,9 @@ export default function Dashboard() {
       <div className="card">
         <div className="chart-header" style={{ marginBottom: '1.25rem' }}>
           <h3>Department Carbon Budgets</h3>
-          <span className="badge badge-orange">Live</span>
+          <span className={`badge ${grid?.available ? 'badge-green' : 'badge-gray'}`}>
+            {grid?.available ? 'Live grid data' : 'Tracked budgets'}
+          </span>
         </div>
         <div className="budget-grid">
           {Object.entries(allBudgets).map(([dept, b]: [string, any]) => {
@@ -361,7 +363,7 @@ export default function Dashboard() {
       </div>
 
       {/* Grid Forecast */}
-      {grid?.forecast && (
+      {grid?.forecast?.length > 0 && (
         <div className="card">
           <div className="chart-header" style={{ marginBottom: '1rem' }}>
             <h3>24h Carbon Intensity Forecast</h3>
@@ -454,7 +456,7 @@ export default function Dashboard() {
           </table>
           {ledger.length === 0 && (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              No requests yet. Use the AI Helpdesk or click "Run Demo Queries" above.
+              No requests yet. Use the AI Helpdesk to create your first workload record.
             </div>
           )}
         </div>

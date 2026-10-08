@@ -73,7 +73,6 @@ export const api = {
 
   // RAG
   ragStats: () => apiCall<any>('/api/rag/stats'),
-  ragReingest: () => apiCall<any>('/api/rag/reingest', { method: 'POST' }),
 
   ragUpload: async (file: File) => {
     const form = new FormData();

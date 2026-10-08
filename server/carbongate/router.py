@@ -25,7 +25,6 @@ LOW_COMPLEXITY_PATTERNS = [
     r"\bwhere is\b",
     r"\bwhat are\b",
     r"\bdeadline\b",
-    r"\bfee\b",
     r"\bdate\b",
     r"\btime\b",
     r"\bcontact\b",
@@ -34,8 +33,6 @@ LOW_COMPLEXITY_PATTERNS = [
     r"\baddress\b",
     r"\bschedule\b",
     r"\btimetable\b",
-    r"\bhostel\b",
-    r"\bcanteen\b",
 ]
 
 HIGH_COMPLEXITY_PATTERNS = [

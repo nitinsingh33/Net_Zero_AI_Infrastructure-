@@ -15,14 +15,14 @@ const WORKLOAD_TYPES = [
 ];
 
 const EXAMPLE_QUESTIONS = [
-  "What is the annual fee for B.Tech?",
-  "When is the hostel fee deadline?",
-  "What are the admission requirements for 2025-26?",
-  "Tell me about the placement statistics",
-  "What is the attendance requirement for exams?",
-  "Compare MBA specializations in detail",
-  "What are the library timings and borrowing rules?",
-  "How does the scholarship program work?",
+  "Summarize the key recommendations in the uploaded report.",
+  "What are the most important operational risks in these sources?",
+  "List the document's recommended actions in priority order.",
+  "Compare the two main approaches described in the source material.",
+  "What evidence supports the report's main conclusion?",
+  "Create a concise briefing for a sustainability team.",
+  "Which information is missing for an informed decision?",
+  "Explain the most relevant energy trends in simple terms.",
 ];
 
 type Message = {
@@ -144,7 +144,7 @@ export default function Helpdesk() {
     {
       id: '0',
       role: 'assistant',
-      content: "👋 Welcome to the Amity University AI Helpdesk, powered by CarbonGate! I can answer questions about admissions, fees, examinations, hostels, placements, and university policies. Every response is carbon-optimized — I'll only use as much compute as your question requires!",
+      content: "👋 Welcome to the CarbonGate Workload Console. Upload approved source documents, then ask a question or request a report. Every response is routed and measured to use only the compute your task requires.",
       timestamp: new Date(),
     }
   ]);
@@ -214,8 +214,8 @@ export default function Helpdesk() {
       {/* Header */}
       <div className="helpdesk-header">
         <div>
-          <h1 className="helpdesk-title">Amity University <span className="text-gradient">AI Helpdesk</span></h1>
-          <p className="helpdesk-subtitle">Powered by CarbonGate · Every query is carbon-optimized</p>
+          <h1 className="helpdesk-title">CarbonGate <span className="text-gradient">Workload Console</span></h1>
+          <p className="helpdesk-subtitle">Grounded AI workloads, routed and measured for lower-carbon execution</p>
         </div>
         <div className="helpdesk-controls">
           <div className="control-group">
@@ -295,7 +295,7 @@ export default function Helpdesk() {
                   sendMessage();
                 }
               }}
-              placeholder="Ask about fees, admissions, exams, hostel, placements... (Enter to send)"
+              placeholder="Ask about your connected knowledge sources… (Enter to send)"
               rows={2}
               disabled={loading}
             />
@@ -314,7 +314,7 @@ export default function Helpdesk() {
           {/* Example Questions */}
           <div className="card">
             <h3 style={{ fontSize: '0.9rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>
-              Example Questions
+              Sample Prompts
             </h3>
             <div className="examples-list">
               {EXAMPLE_QUESTIONS.map((q, i) => (

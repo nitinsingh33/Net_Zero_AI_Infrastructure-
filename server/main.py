@@ -6,6 +6,10 @@ import os
 import sys
 from uuid import uuid4
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -28,7 +32,7 @@ from carbongate.budget import get_budget_status, update_budget_limit, get_pressu
 from carbongate.cache import cache_stats, cache_clear
 from carbongate.scheduler import get_schedule_recommendation, should_defer
 from carbongate.measurer import get_grid_data
-from carbongate.rag import ingest_documents, get_rag_stats
+from carbongate.rag import ingest_source_directory, ingest_source_file, get_rag_stats
 
 # Initialize DB and ingest documents on startup
 init_db()
@@ -39,7 +43,14 @@ app = FastAPI(
     version="1.0.0",
 )
 
-allowed_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()]
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -80,18 +91,12 @@ class ScheduleRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize RAG knowledge base on startup."""
-    if os.getenv("SEED_DEMO_DOCUMENTS", "false").lower() == "true":
-        try:
-            from data.amity_documents import get_all_documents
-            docs = get_all_documents()
-            result = ingest_documents(docs)
-            print(f"[CarbonGate] RAG initialized: {result}")
-        except Exception as error:
-            print(f"[CarbonGate] RAG init warning: {error}")
-    else:
-        print("[CarbonGate] Demo documents disabled; upload approved source documents through /api/rag/upload.")
-    
+    """Initialize budgets and index approved source documents."""
+    source_dir = Path(__file__).parent / "data" / "sources"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    indexing = await run_in_threadpool(ingest_source_directory, source_dir)
+    print(f"[CarbonGate] Indexed {indexing['sources_indexed']} approved source document(s).")
+
     # Ensure default department budget exists
     ensure_budget("default", 100_000)
     ensure_budget("engineering", 50_000)
@@ -245,27 +250,14 @@ async def get_rag_info():
     return get_rag_stats()
 
 
-@app.post("/api/rag/reingest")
-async def reingest_documents(background_tasks: BackgroundTasks):
-    """Re-ingest all university documents into the RAG knowledge base."""
-    if os.getenv("SEED_DEMO_DOCUMENTS", "false").lower() != "true":
-        raise HTTPException(status_code=409, detail="Sample documents are disabled. Upload approved source documents instead.")
-
-    def do_ingest():
-        from data.amity_documents import get_all_documents
-        docs = get_all_documents()
-        ingest_documents(docs, force=True)
-    
-    background_tasks.add_task(do_ingest)
-    return {"status": "ingestion_started", "message": "Documents are being re-indexed in the background"}
-
-
 @app.post("/api/rag/upload")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """Upload a PDF or text document and dynamically ingest it into the CarbonGate Knowledge Base."""
     filename = file.filename or "upload"
     if not filename.lower().endswith((".pdf", ".txt", ".md")):
         raise HTTPException(status_code=400, detail="Only PDF, TXT, and MD files are supported.")
+    source_id = f"source_{uuid4().hex}"
+    safe_filename = Path(filename).name
 
     try:
         content = await file.read()
@@ -289,23 +281,49 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="No readable text found in the document.")
 
+        source_dir = Path(__file__).parent / "data" / "sources"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        stored_path = source_dir / f"{source_id}_{safe_filename}"
+        stored_path.write_bytes(content)
+
         # Ingest the dynamically extracted text in the background
         def do_dynamic_ingest():
-            print(f"[CarbonGate] Ingesting newly uploaded document: {filename}")
-            ingest_documents([extracted_text], source_id=f"upload_{uuid4().hex}")
+            print(f"[CarbonGate] Ingesting approved source: {safe_filename}")
+            ingest_source_file(stored_path)
 
         background_tasks.add_task(do_dynamic_ingest)
 
         return {
             "status": "success",
-            "message": f"Document '{filename}' uploaded successfully and is being ingested.",
-            "estimated_length": len(extracted_text)
+            "message": f"Document '{safe_filename}' uploaded successfully and is being ingested.",
+            "source_id": source_id,
+            "estimated_length": len(extracted_text),
         }
     except HTTPException:
         raise
     except Exception as e:
         print(f"[CarbonGate] Upload error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
+
+
+@app.get("/api/rag/sources")
+async def get_rag_sources():
+    """List approved documents retained for the knowledge base."""
+    source_dir = Path(__file__).parent / "data" / "sources"
+    if not source_dir.exists():
+        return {"sources": []}
+
+    return {
+        "sources": [
+            {
+                "name": source.name,
+                "size_bytes": source.stat().st_size,
+                "modified_at": source.stat().st_mtime,
+            }
+            for source in sorted(source_dir.iterdir())
+            if source.is_file()
+        ]
+    }
 
 if __name__ == "__main__":
     uvicorn.run(

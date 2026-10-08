@@ -143,6 +143,33 @@ class CarbonGateway:
         
         if compression_stats["reduction_pct"] > 10:
             optimizations.append("context_compression")
+
+        if not compressed_chunks:
+            elapsed = round((time.time() - start_time) * 1000, 2)
+            return {
+                "request_id": request_id,
+                "query": query,
+                "answer": (
+                    "No relevant approved source content is indexed yet. "
+                    "Upload a relevant PDF, TXT, or Markdown document, then try again."
+                ),
+                "cache_hit": False,
+                "model": None,
+                "complexity": routing["complexity"],
+                "energy_wh": None,
+                "carbon_g": None,
+                "latency_ms": elapsed,
+                "optimizations": [*optimizations, "no_source_context"],
+                "context_stats": compression_stats,
+                "budget_status": budget_status,
+                "pipeline_trace": [
+                    "budget_check → OK",
+                    "shift → proceed",
+                    "cache → MISS",
+                    "retrieve → no relevant source context",
+                    "inference → skipped",
+                ],
+            }
         
         # ── 6. Execute LLM inference ──────────────────────────────────────────
         llm_result = answer_with_rag(

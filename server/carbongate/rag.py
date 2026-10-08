@@ -11,11 +11,12 @@ Supports:
 import os
 import time
 import re
+import hashlib
 from pathlib import Path
 from typing import Optional, List
 import chromadb
 
-RAG_COLLECTION = "amity_knowledge"
+RAG_COLLECTION = "carbongate_knowledge"
 CHROMA_RAG_PATH = str(Path(__file__).parent.parent / "data" / "chroma_rag")
 CHUNK_SIZE = 500        # characters per chunk
 CHUNK_OVERLAP = 100     # overlap between chunks
@@ -60,8 +61,13 @@ def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OV
     return chunks
 
 
-def ingest_documents(documents: list[str], force: bool = False, source_id: Optional[str] = None) -> dict:
-    """Ingest university documents into ChromaDB RAG collection."""
+def ingest_documents(
+    documents: list[str],
+    force: bool = False,
+    source_id: Optional[str] = None,
+    source_name: Optional[str] = None,
+) -> dict:
+    """Ingest approved source documents into the ChromaDB RAG collection."""
     col = _get_rag_collection()
     
     all_chunks = []
@@ -75,7 +81,12 @@ def ingest_documents(documents: list[str], force: bool = False, source_id: Optio
             chunk_id = f"{source_prefix}_doc{doc_idx}_chunk{chunk_idx}"
             all_chunks.append(chunk)
             all_ids.append(chunk_id)
-            all_metas.append({"doc_idx": doc_idx, "chunk_idx": chunk_idx})
+            all_metas.append({
+                "doc_idx": doc_idx,
+                "chunk_idx": chunk_idx,
+                "source_id": source_prefix,
+                "source_name": source_name or source_prefix,
+            })
 
     batch_size = 50
     for i in range(0, len(all_chunks), batch_size):
@@ -86,6 +97,46 @@ def ingest_documents(documents: list[str], force: bool = False, source_id: Optio
         )
 
     return {"status": "indexed", "chunks": len(all_chunks)}
+
+
+def _extract_source_text(source_path: Path) -> str:
+    suffix = source_path.suffix.lower()
+    if suffix in {".txt", ".md"}:
+        return source_path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".pdf":
+        import PyPDF2
+
+        reader = PyPDF2.PdfReader(str(source_path))
+        return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    raise ValueError(f"Unsupported source type: {source_path.suffix}")
+
+
+def ingest_source_file(source_path: Path) -> dict:
+    """Extract and index one approved source file using a stable content-based ID."""
+    content = source_path.read_bytes()
+    source_id = f"source_{hashlib.sha256(content).hexdigest()[:16]}"
+    text = _extract_source_text(source_path)
+    if not text.strip():
+        raise ValueError(f"No readable text found in {source_path.name}")
+    result = ingest_documents([text], source_id=source_id, source_name=source_path.name)
+    return {**result, "source_id": source_id, "source_name": source_path.name}
+
+
+def ingest_source_directory(source_dir: Path) -> dict:
+    """Index every supported approved source document in a directory."""
+    supported_suffixes = {".pdf", ".txt", ".md"}
+    results = []
+    for source_path in sorted(source_dir.iterdir()) if source_dir.exists() else []:
+        if not source_path.is_file() or source_path.suffix.lower() not in supported_suffixes:
+            continue
+        try:
+            results.append(ingest_source_file(source_path))
+        except Exception as error:
+            results.append({"source_name": source_path.name, "error": str(error)})
+    return {
+        "sources_indexed": sum(1 for result in results if "error" not in result),
+        "results": results,
+    }
 
 
 def retrieve_context(query: str, n_results: int = TOP_K_RESULTS) -> list[str]:
@@ -282,24 +333,32 @@ def _grounded_rag_synthesizer(query: str, context_chunks: list[str], model: str)
     t0 = time.time()
     query_words = set(re.findall(r'\b[a-z]{3,}\b', query.lower()))
     
+    boilerplate_prefixes = (
+        "scenarios towards viksit bharat",
+        "page ",
+        "copyright",
+    )
     scored_sentences = []
     for chunk in context_chunks:
-        # Split into sentences or lines
-        sentences = re.split(r'(?<=[.!?\n])\s+', chunk)
+        normalized_chunk = re.sub(r'\s+', ' ', chunk).strip()
+        sentences = re.split(r'(?<=[.!?])\s+', normalized_chunk)
         for s in sentences:
-            s_clean = s.strip()
-            if len(s_clean) < 20:
+            s_clean = s.strip(" -•\t")
+            if len(s_clean) < 40 or len(s_clean) > 450:
+                continue
+            if s_clean.lower().startswith(boilerplate_prefixes):
                 continue
             s_words = set(re.findall(r'\b[a-z]{3,}\b', s_clean.lower()))
             overlap = len(query_words.intersection(s_words))
             if overlap > 0:
-                scored_sentences.append((overlap, s_clean))
+                score = overlap / max(len(s_words), 1) ** 0.25
+                scored_sentences.append((score, s_clean))
 
     scored_sentences.sort(key=lambda x: x[0], reverse=True)
     selected = []
     seen = set()
     for _, s in scored_sentences:
-        normalized = s[:50]
+        normalized = re.sub(r'\W+', '', s.lower())[:80]
         if normalized not in seen:
             seen.add(normalized)
             selected.append(s)
@@ -307,14 +366,13 @@ def _grounded_rag_synthesizer(query: str, context_chunks: list[str], model: str)
             break
 
     if selected:
-        answer_body = " ".join(selected)
-        formatted_answer = f"{answer_body}\n\n[Verified via Amity University Knowledge Base • Zero-Emission RAG]"
+        formatted_answer = "Based on the indexed sources:\n\n" + "\n".join(
+            f"- {sentence}" for sentence in selected
+        ) + "\n\n[Grounded in connected knowledge sources • CarbonGate]"
     else:
-        # Clean fallback based on university documents
         formatted_answer = (
-            "Based on the Amity University Guidelines: Please refer to the student admission portal "
-            "(admissions.amity.edu) or visit the Academic Office at Block E2. "
-            "For urgent inquiries, call the central helpline at 0120-4392000."
+            "I do not have enough approved source material to answer that reliably. "
+            "Please upload a relevant public report, policy, or operational document and try again."
         )
 
     t1 = time.time()
@@ -338,15 +396,18 @@ def answer_with_rag(
     model: str = "llama3.2:1b",
 ) -> dict:
     """Generate an answer using RAG context with multi-provider routing."""
+    if not context_chunks:
+        return _grounded_rag_synthesizer(query=query, context_chunks=[], model="no_context")
+
     context_text = "\n\n---\n\n".join(context_chunks)
     
     system_prompt = (
-        "You are the Amity University AI Helpdesk Assistant. "
-        "Answer student questions accurately and helpfully based on the provided university context. "
-        "Keep answers concise and clear."
+        "You are CarbonGate's knowledge assistant. "
+        "Answer only from the provided source context. If the context is insufficient, say so clearly. "
+        "Keep answers concise, factual, and clear."
     )
 
-    user_prompt = f"University Information:\n{context_text}\n\nStudent Question: {query}\n\nPlease provide a clear answer:"
+    user_prompt = f"Approved Source Context:\n{context_text}\n\nQuestion: {query}\n\nProvide a clear, source-grounded answer:"
 
     # 1. Try Local Ollama
     res = call_ollama(prompt=user_prompt, model=model, system=system_prompt)
