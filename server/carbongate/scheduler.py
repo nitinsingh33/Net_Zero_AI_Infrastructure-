@@ -1,115 +1,63 @@
-"""
-CarbonGate — Carbon-Aware Scheduler
-Decides whether a workload should be deferred to a lower-carbon window.
-"""
-from typing import Optional
-from .measurer import get_current_grid_intensity, get_forecast_intensity, get_best_execution_window
+"""Carbon-aware scheduling decisions based on live grid forecasts."""
+from .measurer import get_best_execution_window, get_current_grid_reading, get_forecast_intensity
 
-# ---------------------------------------------------------------------------
-# Workload types that can be deferred
-# ---------------------------------------------------------------------------
 DEFERRABLE_TYPES = {
-    "batch_summarization",
-    "embedding_generation",
-    "report_generation",
-    "dataset_processing",
-    "document_indexing",
-    "bulk_analysis",
-    "batch",
+    "batch_summarization", "embedding_generation", "report_generation",
+    "dataset_processing", "document_indexing", "bulk_analysis", "batch",
 }
-
-# Carbon intensity threshold: if current > threshold, consider deferring
-DEFER_INTENSITY_THRESHOLD = 700.0   # gCO₂/kWh
-
-# Minimum savings to justify deferring (percent)
 MIN_SAVINGS_PCT = 15.0
 
 
 def is_deferrable(workload_type: str, is_critical: bool = False) -> bool:
-    """Check if a workload type can be deferred."""
-    if is_critical:
-        return False
-    return workload_type.lower() in DEFERRABLE_TYPES
+    return not is_critical and workload_type.lower() in DEFERRABLE_TYPES
 
 
-def should_defer(
-    workload_type: str,
-    is_critical: bool = False,
-    max_delay_hours: int = 12,
-) -> dict:
-    """
-    Decide whether to defer this workload.
-    
-    Returns:
-        dict with: defer (bool), reason, best_window, savings_pct, current_intensity
-    """
-    current = get_current_grid_intensity()
-
-    if is_critical:
+def should_defer(workload_type: str, is_critical: bool = False, max_delay_hours: int = 12) -> dict:
+    current = get_current_grid_reading()
+    intensity = current["intensity"]
+    if intensity is None:
         return {
             "defer": False,
-            "reason": "Critical workload — executing immediately",
-            "current_intensity": current,
+            "reason": "Live grid carbon data is unavailable; CarbonGate will not make a simulated scheduling claim.",
+            "current_intensity": None,
             "best_window": None,
-            "savings_pct": 0,
+            "savings_pct": None,
+            "grid_source": current["source"],
         }
-
+    if is_critical:
+        return {"defer": False, "reason": "Critical workload — executing immediately", "current_intensity": intensity, "best_window": None, "savings_pct": 0, "grid_source": current["source"]}
     if not is_deferrable(workload_type):
-        return {
-            "defer": False,
-            "reason": f"Workload type '{workload_type}' is not deferrable (latency-sensitive)",
-            "current_intensity": current,
-            "best_window": None,
-            "savings_pct": 0,
-        }
+        return {"defer": False, "reason": f"Workload type '{workload_type}' is latency-sensitive", "current_intensity": intensity, "best_window": None, "savings_pct": 0, "grid_source": current["source"]}
 
-    # Find best window in the allowed delay period
-    best = get_best_execution_window(hours_available=max_delay_hours)
-    best_intensity = best["intensity"]
-    savings_pct = round((1 - best_intensity / max(current, 1)) * 100, 1)
+    best = get_best_execution_window(max_delay_hours)
+    if best is None:
+        return {"defer": False, "reason": "Live grid forecast is unavailable; executing without a scheduling decision.", "current_intensity": intensity, "best_window": None, "savings_pct": None, "grid_source": current["source"]}
 
-    if current <= DEFER_INTENSITY_THRESHOLD:
-        return {
-            "defer": False,
-            "reason": f"Current grid intensity ({current} gCO₂/kWh) is acceptable",
-            "current_intensity": current,
-            "best_window": best,
-            "savings_pct": savings_pct,
-        }
-
-    if savings_pct < MIN_SAVINGS_PCT:
-        return {
-            "defer": False,
-            "reason": f"Potential savings ({savings_pct}%) too small to justify deferral",
-            "current_intensity": current,
-            "best_window": best,
-            "savings_pct": savings_pct,
-        }
-
+    savings_pct = round((1 - best["intensity"] / max(intensity, 1)) * 100, 1)
+    defer = savings_pct >= MIN_SAVINGS_PCT
     return {
-        "defer": True,
+        "defer": defer,
         "reason": (
-            f"High grid intensity now ({current} gCO₂/kWh). "
-            f"Best window at {best['label']} ({best_intensity} gCO₂/kWh) saves ~{savings_pct}% CO₂"
+            f"Best live forecast window is {best['label']} ({best['intensity']} gCO₂/kWh), saving about {savings_pct}% CO₂."
+            if defer else f"Potential savings ({savings_pct}%) do not justify deferral."
         ),
-        "current_intensity": current,
+        "current_intensity": intensity,
         "best_window": best,
         "savings_pct": savings_pct,
+        "grid_source": current["source"],
     }
 
 
 def get_schedule_recommendation(workload_type: str = "batch", max_delay_hours: int = 24) -> dict:
-    """Get a full scheduling recommendation with 24h forecast."""
-    forecast = get_forecast_intensity(24)
-    current = get_current_grid_intensity()
+    current = get_current_grid_reading()
     best = get_best_execution_window(max_delay_hours)
-    
     return {
-        "current_intensity": current,
+        "current_intensity": current["intensity"],
         "best_window": best,
-        "forecast": forecast,
+        "forecast": get_forecast_intensity(24),
+        "grid_source": current["source"],
         "recommendation": (
-            f"Execute at {best['label']} for {best['intensity']} gCO₂/kWh "
-            f"vs {current} gCO₂/kWh now"
+            f"Execute at {best['label']} for {best['intensity']} gCO₂/kWh versus {current['intensity']} gCO₂/kWh now."
+            if best and current["intensity"] is not None else "Live grid forecast is unavailable."
         ),
     }

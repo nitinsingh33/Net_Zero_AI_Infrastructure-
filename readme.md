@@ -40,6 +40,13 @@ GROQ_API_KEY=your_key_here
 
 # 3. Google Gemini API (Free tier available)
 GEMINI_API_KEY=your_key_here
+
+# Live grid-carbon data (required for real-time carbon accounting and scheduling)
+ELECTRICITY_MAPS_API_KEY=your_key_here
+GRID_ZONE=IN-NO
+
+# Optional: seed the bundled demonstration knowledge base. Disabled by default.
+SEED_DEMO_DOCUMENTS=false
 ```
 
 ### 2. Run the Application

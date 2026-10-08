@@ -10,3 +10,5 @@ scikit-learn==1.5.2
 python-dotenv==1.0.1
 aiofiles==24.1.0
 sentence-transformers==3.3.1
+python-multipart==0.0.20
+PyPDF2==3.0.1

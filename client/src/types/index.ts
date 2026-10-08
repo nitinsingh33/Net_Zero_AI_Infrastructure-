@@ -47,6 +47,8 @@ export interface QueryResponse {
   carbon_g: number;
   latency_ms: number;
   grid_intensity?: number;
+  grid_source?: string;
+  energy_source?: string;
   input_tokens?: number;
   output_tokens?: number;
   optimizations: string[];

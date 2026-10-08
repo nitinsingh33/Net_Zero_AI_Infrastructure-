@@ -1,153 +1,113 @@
-"""
-CarbonGate — Energy & Carbon Measurer
-Estimates energy consumption and CO₂ emissions per LLM request.
-Features:
-- Live physical GPU power telemetry from NVIDIA GPUs (via nvidia-smi / NVML)
-- Live grid carbon intensity from open grid APIs or Electricity Maps
-- Calibrated hardware empirical energy profiles (Wh / 1000 tokens)
-"""
-import time
+"""Live energy and grid-carbon measurement helpers."""
 import os
 import subprocess
-import datetime
-from typing import Optional, Tuple
+import time
+from datetime import datetime
+from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Hardware energy models (Wh per 1000 tokens)
-# ---------------------------------------------------------------------------
-MODEL_ENERGY_PROFILE = {
-    # model_key: (wh_per_1k_input_tokens, wh_per_1k_output_tokens)
-    "1b":  (0.0003, 0.0008),
-    "3b":  (0.0008, 0.0022),
-    "8b":  (0.0020, 0.0055),
-    "large": (0.0050, 0.0140),
-}
+import httpx
 
-DEFAULT_CARBON_INTENSITY = 700.0
-
-HOURLY_INTENSITY = [
-    720, 730, 710, 680, 650, 630,   # 00-05 AM
-    660, 700, 740, 760, 780, 790,   # 06-11 AM
-    800, 810, 820, 810, 790, 770,   # 12-17 PM
-    760, 750, 740, 730, 720, 720,   # 18-23 PM
-]
-
-# Cache for live grid query
-_live_grid_cache = {"timestamp": 0.0, "intensity": None, "source": "simulated"}
+ELECTRICITY_MAPS_BASE_URL = "https://api.electricitymaps.com/v4"
+GRID_CACHE_TTL_SECONDS = 300
+_grid_cache: dict[str, object] = {"expires_at": 0.0, "current": None, "forecast": []}
 
 
-def get_live_gpu_power() -> Tuple[Optional[float], Optional[str]]:
-    """
-    Attempt to read live physical GPU power draw in watts from NVIDIA GPU.
-    Returns (power_watts, gpu_name) or (None, None).
-    """
+def get_live_gpu_power() -> tuple[Optional[float], Optional[str]]:
+    """Read instantaneous NVIDIA GPU power draw, if NVIDIA tooling is available."""
     try:
-        out = subprocess.check_output(
+        output = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=power.draw,name", "--format=csv,noheader,nounits"],
             encoding="utf-8",
             timeout=1.5,
             stderr=subprocess.DEVNULL,
         ).strip()
-        if out:
-            parts = [p.strip() for p in out.splitlines()[0].split(",")]
-            watts = float(parts[0])
-            name = parts[1] if len(parts) > 1 else "NVIDIA GPU"
-            return watts, name
-    except Exception:
+        if output:
+            watts, *name = [value.strip() for value in output.splitlines()[0].split(",")]
+            return float(watts), name[0] if name else "NVIDIA GPU"
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
         pass
     return None, None
 
 
-def fetch_live_grid_intensity() -> Tuple[float, str]:
-    """
-    Fetch live real-world grid carbon intensity.
-    Checks Electricity Maps if key configured, or open public carbon intensity API.
-    """
-    global _live_grid_cache
+def _unavailable_grid(message: str) -> dict:
+    return {
+        "available": False,
+        "intensity": None,
+        "source": "unavailable",
+        "observed_at": None,
+        "error": message,
+    }
+
+
+def _grid_request(path: str, params: dict[str, object]) -> dict:
+    api_key = os.getenv("ELECTRICITY_MAPS_API_KEY")
+    zone = os.getenv("GRID_ZONE")
+    if not api_key or not zone:
+        raise RuntimeError("Set ELECTRICITY_MAPS_API_KEY and GRID_ZONE to enable live grid-carbon data.")
+
+    response = httpx.get(
+        f"{ELECTRICITY_MAPS_BASE_URL}{path}",
+        params={**params, "zone": zone},
+        headers={"auth-token": api_key},
+        timeout=8.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_grid_data(hours: int = 24) -> dict:
+    """Return current and forecast carbon intensity from Electricity Maps, never simulated data."""
     now = time.time()
-    if _live_grid_cache["intensity"] is not None and (now - _live_grid_cache["timestamp"] < 600):
-        return _live_grid_cache["intensity"], _live_grid_cache["source"]
+    if now < float(_grid_cache["expires_at"]):
+        return {"current": _grid_cache["current"], "forecast": _grid_cache["forecast"]}
 
-    # Check Electricity Maps API
-    em_key = os.getenv("ELECTRICITY_MAPS_API_KEY")
-    em_zone = os.getenv("GRID_ZONE", "IN-NO")
-    if em_key:
-        try:
-            import httpx
-            resp = httpx.get(
-                f"https://api.electricitymap.org/v3/carbon-intensity/latest?zone={em_zone}",
-                headers={"auth-token": em_key},
-                timeout=3.0,
-            )
-            if resp.status_code == 200:
-                val = float(resp.json().get("carbonIntensity", 700))
-                _live_grid_cache = {"timestamp": now, "intensity": val, "source": f"ElectricityMaps ({em_zone})"}
-                return val, _live_grid_cache["source"]
-        except Exception:
-            pass
+    try:
+        latest = _grid_request("/carbon-intensity/latest", {})
+        forecast_response = _grid_request(
+            "/carbon-intensity/forecast",
+            {"horizonHours": min(max(hours, 6), 72), "temporalGranularity": "hourly"},
+        )
+        current = {
+            "available": True,
+            "intensity": float(latest["carbonIntensity"]),
+            "source": "Electricity Maps",
+            "observed_at": latest.get("datetime"),
+            "zone": latest.get("zone", os.getenv("GRID_ZONE")),
+            "is_estimated": latest.get("isEstimated", False),
+        }
+        forecast = [
+            {
+                "hour_offset": index,
+                "label": item["datetime"],
+                "intensity": float(item["carbonIntensity"]),
+                "observed_at": item["datetime"],
+            }
+            for index, item in enumerate(forecast_response.get("forecast", [])[:hours])
+            if item.get("carbonIntensity") is not None
+        ]
+        _grid_cache.update({"expires_at": now + GRID_CACHE_TTL_SECONDS, "current": current, "forecast": forecast})
+        return {"current": current, "forecast": forecast}
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, RuntimeError) as error:
+        current = _unavailable_grid(str(error))
+        _grid_cache.update({"expires_at": now + 30, "current": current, "forecast": []})
+        return {"current": current, "forecast": []}
 
-    # Fallback to calibrated hourly curve
-    hour = datetime.datetime.now().hour
-    val = float(HOURLY_INTENSITY[hour])
-    _live_grid_cache = {"timestamp": now, "intensity": val, "source": "regional_hourly_profile"}
-    return val, _live_grid_cache["source"]
+
+def get_current_grid_reading() -> dict:
+    return get_grid_data(24)["current"]
 
 
-def get_current_grid_intensity() -> float:
-    """Return grid carbon intensity for current hour (gCO2/kWh)."""
-    val, _ = fetch_live_grid_intensity()
-    return val
+def get_current_grid_intensity() -> Optional[float]:
+    return get_current_grid_reading()["intensity"]
 
 
 def get_forecast_intensity(hours: int = 24) -> list[dict]:
-    """Return hourly carbon intensity forecast."""
-    now = datetime.datetime.now()
-    result = []
-    for i in range(hours):
-        h = (now.hour + i) % 24
-        result.append({
-            "hour_offset": i,
-            "hour": h,
-            "intensity": HOURLY_INTENSITY[h],
-            "label": f"{h:02d}:00",
-        })
-    return result
+    return get_grid_data(hours)["forecast"]
 
 
-def get_best_execution_window(hours_available: int = 24, min_window_hours: int = 2) -> dict:
-    """Find the lowest-carbon execution window in the forecast."""
+def get_best_execution_window(hours_available: int = 24) -> Optional[dict]:
     forecast = get_forecast_intensity(hours_available)
-    best = min(forecast, key=lambda x: x["intensity"])
-    return best
-
-
-def estimate_energy_wh(
-    model_key: str,
-    input_tokens: int,
-    output_tokens: int,
-    latency_sec: float = 0.0,
-) -> Tuple[float, str]:
-    """
-    Estimate or measure energy consumption in watt-hours.
-    Uses real physical GPU power if available, otherwise calibrated token model.
-    """
-    gpu_watts, gpu_name = get_live_gpu_power()
-    if gpu_watts is not None and latency_sec > 0.05:
-        # Physical energy: Watts * hours
-        wh = (gpu_watts * (latency_sec / 3600.0))
-        return round(max(wh, 0.00005), 6), f"Physical GPU Telemetry ({gpu_name} @ {gpu_watts:.1f}W)"
-
-    profile = MODEL_ENERGY_PROFILE.get(model_key, MODEL_ENERGY_PROFILE["large"])
-    wh = (input_tokens / 1000) * profile[0] + (output_tokens / 1000) * profile[1]
-    return round(wh, 6), f"Calibrated {model_key.upper()} Model Profile"
-
-
-def estimate_carbon_g(energy_wh: float, intensity: Optional[float] = None) -> float:
-    """Convert energy (Wh) to CO₂ grams using grid intensity (gCO₂/kWh)."""
-    if intensity is None:
-        intensity = get_current_grid_intensity()
-    carbon = (energy_wh / 1000) * intensity
-    return round(carbon, 6)
+    return min(forecast, key=lambda item: item["intensity"]) if forecast else None
 
 
 def measure_request(
@@ -157,31 +117,33 @@ def measure_request(
     start_time: float,
     end_time: float,
 ) -> dict:
-    """Compute full carbon metrics for a request with physical telemetry."""
+    """Measure local GPU energy when possible and calculate carbon from live grid data."""
     latency_sec = max(end_time - start_time, 0.001)
-    latency_ms = latency_sec * 1000
-    energy_wh, energy_source = estimate_energy_wh(model_key, input_tokens, output_tokens, latency_sec)
-    intensity, grid_source = fetch_live_grid_intensity()
-    carbon_g = estimate_carbon_g(energy_wh, intensity)
+    gpu_watts, gpu_name = get_live_gpu_power()
+    if gpu_watts is None:
+        energy_wh = None
+        energy_source = "unavailable: NVIDIA GPU telemetry was not detected"
+    else:
+        energy_wh = round(gpu_watts * latency_sec / 3600, 6)
+        energy_source = f"NVIDIA GPU telemetry ({gpu_name})"
+
+    grid = get_current_grid_reading()
+    carbon_g = None
+    if energy_wh is not None and grid["intensity"] is not None:
+        carbon_g = round(energy_wh * float(grid["intensity"]) / 1000, 6)
+
     return {
         "energy_wh": energy_wh,
         "carbon_g": carbon_g,
-        "latency_ms": round(latency_ms, 2),
-        "grid_intensity": intensity,
+        "latency_ms": round(latency_sec * 1000, 2),
+        "grid_intensity": grid["intensity"],
+        "grid_source": grid["source"],
+        "energy_source": energy_source,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "energy_source": energy_source,
-        "grid_source": grid_source,
     }
 
 
 def baseline_measure(input_tokens: int, output_tokens: int) -> dict:
-    """Simulate baseline (always-large-model, no cache) energy for comparison."""
-    energy_wh, _ = estimate_energy_wh("large", input_tokens, output_tokens)
-    intensity = get_current_grid_intensity()
-    carbon_g = estimate_carbon_g(energy_wh, intensity)
-    return {
-        "energy_wh": energy_wh,
-        "carbon_g": carbon_g,
-        "model": "large",
-    }
+    """A baseline cannot be measured without executing it, so do not fabricate one."""
+    return {"energy_wh": None, "carbon_g": None, "model": "not measured"}

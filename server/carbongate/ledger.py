@@ -99,7 +99,7 @@ def record_request(
         SET used_g = used_g + ?, updated_at = ?
         WHERE department = ?
         """,
-        (carbon_g, ts, department),
+        (carbon_g or 0.0, ts, department),
     )
     conn.commit()
     conn.close()

@@ -60,21 +60,19 @@ def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OV
     return chunks
 
 
-def ingest_documents(documents: list[str], force: bool = False) -> dict:
+def ingest_documents(documents: list[str], force: bool = False, source_id: Optional[str] = None) -> dict:
     """Ingest university documents into ChromaDB RAG collection."""
     col = _get_rag_collection()
     
-    if col.count() > 0 and not force:
-        return {"status": "already_indexed", "chunks": col.count()}
-
     all_chunks = []
     all_ids = []
     all_metas = []
 
+    source_prefix = source_id or "seed"
     for doc_idx, doc in enumerate(documents):
         chunks = _chunk_text(doc)
         for chunk_idx, chunk in enumerate(chunks):
-            chunk_id = f"doc{doc_idx}_chunk{chunk_idx}"
+            chunk_id = f"{source_prefix}_doc{doc_idx}_chunk{chunk_idx}"
             all_chunks.append(chunk)
             all_ids.append(chunk_id)
             all_metas.append({"doc_idx": doc_idx, "chunk_idx": chunk_idx})

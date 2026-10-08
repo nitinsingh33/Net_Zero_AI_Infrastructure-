@@ -11,7 +11,7 @@ from .router import route
 from .compressor import compress_context
 from .scheduler import should_defer, is_deferrable
 from .budget import get_budget_status, get_pressure_score, can_execute
-from .measurer import measure_request, baseline_measure, get_current_grid_intensity
+from .measurer import measure_request, get_current_grid_intensity
 from .ledger import record_request, init_db
 from .rag import retrieve_context, answer_with_rag, ingest_documents
 
@@ -96,9 +96,9 @@ class CarbonGateway:
             optimizations.append("semantic_cache_hit")
             elapsed = (time.time() - start_time) * 1000
             
-            # Cache hit = near-zero energy (just embedding lookup)
-            energy_wh = 0.000002  # embedding lookup energy
-            carbon_g = 0.0000014
+            # Cache-serving energy is not measurable without CPU process telemetry.
+            energy_wh = None
+            carbon_g = None
             
             record_request(
                 request_id=request_id, query=query, department=dept,
@@ -118,8 +118,10 @@ class CarbonGateway:
                 "complexity": "cached",
                 "energy_wh": energy_wh,
                 "carbon_g": carbon_g,
-                "energy_saved_wh": cache_result["original_energy_wh"],
-                "carbon_saved_g": cache_result["original_carbon_g"],
+                "energy_source": "unavailable: cache-serving CPU energy is not instrumented",
+                "grid_source": "not queried",
+                "energy_saved_wh": None,
+                "carbon_saved_g": None,
                 "latency_ms": round(elapsed, 2),
                 "optimizations": optimizations,
                 "budget_status": budget_status,
@@ -160,13 +162,6 @@ class CarbonGateway:
             end_time=end_time,
         )
 
-        # Baseline for comparison (what it would cost with large model, no optimization)
-        baseline = baseline_measure(
-            input_tokens=llm_result["input_tokens"] + 
-                        sum(len(c.split()) for c in raw_chunks) * 13 // 10,  # uncompressed
-            output_tokens=llm_result["output_tokens"],
-        )
-        
         # Store in semantic cache for future requests
         cache_store(
             query=query,
@@ -209,14 +204,16 @@ class CarbonGateway:
             "carbon_g": metrics["carbon_g"],
             "latency_ms": metrics["latency_ms"],
             "grid_intensity": metrics["grid_intensity"],
+            "energy_source": metrics["energy_source"],
+            "grid_source": metrics["grid_source"],
             "input_tokens": llm_result["input_tokens"],
             "output_tokens": llm_result["output_tokens"],
             "optimizations": optimizations,
             "context_stats": compression_stats,
             "budget_status": budget_status,
-            "baseline": baseline,
-            "carbon_saved_g": round(baseline["carbon_g"] - metrics["carbon_g"], 6),
-            "energy_saved_wh": round(baseline["energy_wh"] - metrics["energy_wh"], 6),
+            "baseline": None,
+            "carbon_saved_g": None,
+            "energy_saved_wh": None,
             "is_mock": llm_result.get("is_mock", False),
             "pipeline_trace": [
                 "budget_check → OK",

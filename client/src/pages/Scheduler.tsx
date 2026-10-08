@@ -42,7 +42,8 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export default function Scheduler() {
   const [forecast, setForecast] = useState<any[]>([]);
-  const [currentIntensity, setCurrentIntensity] = useState(0);
+  const [currentIntensity, setCurrentIntensity] = useState<number | null>(null);
+  const [gridSource, setGridSource] = useState('');
   const [bestWindow, setBestWindow] = useState<any>(null);
   const [checking, setChecking] = useState(false);
   const [workloadType, setWorkloadType] = useState('batch_summarization');
@@ -61,6 +62,7 @@ export default function Scheduler() {
       if (gridRes.status === 'fulfilled') {
         setCurrentIntensity(gridRes.value.current_intensity);
         setForecast(gridRes.value.forecast || []);
+        setGridSource(gridRes.value.source || 'Live provider');
       }
       if (schedRes.status === 'fulfilled') {
         setBestWindow(schedRes.value.best_window);
@@ -94,8 +96,8 @@ export default function Scheduler() {
     }
   };
 
-  const intensityColor = currentIntensity < 400 ? '#00d4a0' : currentIntensity < 600 ? '#eab308' : currentIntensity < 750 ? '#f97316' : '#ef4444';
-  const intensityLabel = currentIntensity < 400 ? 'Very Clean' : currentIntensity < 600 ? 'Moderate' : currentIntensity < 750 ? 'High' : 'Very High';
+  const intensityColor = currentIntensity === null ? '#94a3b8' : currentIntensity < 400 ? '#00d4a0' : currentIntensity < 600 ? '#eab308' : currentIntensity < 750 ? '#f97316' : '#ef4444';
+  const intensityLabel = currentIntensity === null ? 'Unavailable' : currentIntensity < 400 ? 'Very Clean' : currentIntensity < 600 ? 'Moderate' : currentIntensity < 750 ? 'High' : 'Very High';
 
   return (
     <div className="scheduler-page">
@@ -119,14 +121,14 @@ export default function Scheduler() {
             Current Grid Intensity
           </div>
           <div style={{ fontSize: '3rem', fontWeight: 900, color: intensityColor, lineHeight: 1 }}>
-            {currentIntensity}
+            {currentIntensity ?? '—'}
           </div>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
             gCO₂/kWh · {intensityLabel}
           </div>
           <div className="progress-bar" style={{ marginTop: '0.75rem' }}>
             <div className="progress-fill" style={{
-              width: `${Math.min((currentIntensity / 900) * 100, 100)}%`,
+              width: `${currentIntensity === null ? 0 : Math.min((currentIntensity / 900) * 100, 100)}%`,
               background: intensityColor,
             }} />
           </div>
@@ -144,7 +146,7 @@ export default function Scheduler() {
               <div style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
                 {bestWindow.intensity} gCO₂/kWh
               </div>
-              {currentIntensity > 0 && (
+              {currentIntensity !== null && currentIntensity > 0 && (
                 <div style={{ fontSize: '0.8rem', color: '#00d4a0', marginTop: '0.4rem' }}>
                   🌿 {Math.round((1 - bestWindow.intensity / currentIntensity) * 100)}% cleaner than now
                 </div>
@@ -182,7 +184,7 @@ export default function Scheduler() {
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: 700 }}>24-Hour Grid Carbon Intensity Forecast</h3>
-            <span className="badge badge-teal">Simulated India Grid Profile</span>
+            <span className="badge badge-teal">{gridSource || 'Live provider'}</span>
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={forecast} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>

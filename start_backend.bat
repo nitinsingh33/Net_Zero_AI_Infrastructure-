@@ -17,7 +17,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] Installing/checking dependencies...
-pip install fastapi "uvicorn[standard]" pydantic chromadb ollama httpx numpy scikit-learn python-dotenv aiofiles -q
+pip install fastapi "uvicorn[standard]" pydantic chromadb ollama httpx numpy scikit-learn python-dotenv aiofiles python-multipart PyPDF2 -q
 
 echo.
 echo [3/3] Starting CarbonGate backend on http://localhost:8000

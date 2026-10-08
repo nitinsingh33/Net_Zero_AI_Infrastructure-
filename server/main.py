@@ -2,8 +2,9 @@
 CarbonGate — FastAPI Backend Server
 Main API server exposing all CarbonGate functionality.
 """
+import os
 import sys
-import io
+from uuid import uuid4
 from pathlib import Path
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -11,7 +12,8 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -25,7 +27,7 @@ from carbongate.ledger import (
 from carbongate.budget import get_budget_status, update_budget_limit, get_pressure_score
 from carbongate.cache import cache_stats, cache_clear
 from carbongate.scheduler import get_schedule_recommendation, should_defer
-from carbongate.measurer import get_current_grid_intensity, get_forecast_intensity
+from carbongate.measurer import get_grid_data
 from carbongate.rag import ingest_documents, get_rag_stats
 
 # Initialize DB and ingest documents on startup
@@ -37,10 +39,11 @@ app = FastAPI(
     version="1.0.0",
 )
 
+allowed_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -78,13 +81,16 @@ class ScheduleRequest(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize RAG knowledge base on startup."""
-    try:
-        from data.amity_documents import get_all_documents
-        docs = get_all_documents()
-        result = ingest_documents(docs)
-        print(f"[CarbonGate] RAG initialized: {result}")
-    except Exception as e:
-        print(f"[CarbonGate] RAG init warning: {e}")
+    if os.getenv("SEED_DEMO_DOCUMENTS", "false").lower() == "true":
+        try:
+            from data.amity_documents import get_all_documents
+            docs = get_all_documents()
+            result = ingest_documents(docs)
+            print(f"[CarbonGate] RAG initialized: {result}")
+        except Exception as error:
+            print(f"[CarbonGate] RAG init warning: {error}")
+    else:
+        print("[CarbonGate] Demo documents disabled; upload approved source documents through /api/rag/upload.")
     
     # Ensure default department budget exists
     ensure_budget("default", 100_000)
@@ -111,11 +117,16 @@ async def get_status():
 @app.get("/api/grid")
 async def get_grid_status():
     """Get current grid carbon intensity and 24h forecast."""
+    grid = get_grid_data(24)
+    current = grid["current"]
     return {
-        "current_intensity": get_current_grid_intensity(),
-        "forecast": get_forecast_intensity(24),
+        "current_intensity": current["intensity"],
+        "forecast": grid["forecast"],
         "unit": "gCO₂/kWh",
-        "source": "simulated (India grid profile)",
+        "source": current["source"],
+        "available": current["available"],
+        "observed_at": current["observed_at"],
+        "error": current.get("error"),
     }
 
 
@@ -129,7 +140,7 @@ async def process_query(request: QueryRequest):
     """
     gw = get_gateway(request.department)
     try:
-        result = gw.process_query(
+        result = await run_in_threadpool(gw.process_query,
             query=request.query,
             workload_type=request.workload_type,
             is_critical=request.is_critical,
@@ -237,6 +248,9 @@ async def get_rag_info():
 @app.post("/api/rag/reingest")
 async def reingest_documents(background_tasks: BackgroundTasks):
     """Re-ingest all university documents into the RAG knowledge base."""
+    if os.getenv("SEED_DEMO_DOCUMENTS", "false").lower() != "true":
+        raise HTTPException(status_code=409, detail="Sample documents are disabled. Upload approved source documents instead.")
+
     def do_ingest():
         from data.amity_documents import get_all_documents
         docs = get_all_documents()
@@ -246,34 +260,52 @@ async def reingest_documents(background_tasks: BackgroundTasks):
     return {"status": "ingestion_started", "message": "Documents are being re-indexed in the background"}
 
 
-# ── Demo / Simulation Endpoints ────────────────────────────────────────────────
+@app.post("/api/rag/upload")
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """Upload a PDF or text document and dynamically ingest it into the CarbonGate Knowledge Base."""
+    filename = file.filename or "upload"
+    if not filename.lower().endswith((".pdf", ".txt", ".md")):
+        raise HTTPException(status_code=400, detail="Only PDF, TXT, and MD files are supported.")
 
-@app.post("/api/demo/simulate-load")
-async def simulate_load(background_tasks: BackgroundTasks, requests_count: int = 10):
-    """Simulate a batch of requests to populate the ledger for demo purposes."""
-    demo_queries = [
-        ("What is the B.Tech annual fee?", "default", "query"),
-        ("When is the hostel fee deadline?", "default", "query"),
-        ("What are the admission requirements?", "engineering", "query"),
-        ("Tell me about placement statistics", "mba", "query"),
-        ("When are the end semester exams?", "default", "query"),
-        ("What is the attendance requirement?", "engineering", "query"),
-        ("How much is the hostel fee?", "default", "query"),  # should cache hit
-        ("What is the fee deadline for hostel?", "default", "query"),  # should cache hit
-        ("Compare MBA specializations in detail", "mba", "query"),
-        ("Generate a report on student performance trends", "research", "batch_summarization"),
-    ]
-    
-    def run_queries():
-        import random
-        for i in range(min(requests_count, len(demo_queries))):
-            q, dept, wtype = demo_queries[i]
-            gw = get_gateway(dept)
-            gw.process_query(query=q, workload_type=wtype, department=dept)
-    
-    background_tasks.add_task(run_queries)
-    return {"status": "simulation_started", "queries_queued": min(requests_count, len(demo_queries))}
+    try:
+        content = await file.read()
+        extracted_text = ""
 
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Document exceeds the 10 MB upload limit.")
+
+        if filename.lower().endswith(".pdf"):
+            import io
+            import PyPDF2
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+            for page in pdf_reader.pages:
+                text = page.extract_text()
+                if text:
+                    extracted_text += text + "\n\n"
+        else:
+            # Handle txt and md
+            extracted_text = content.decode("utf-8")
+
+        if not extracted_text.strip():
+            raise HTTPException(status_code=400, detail="No readable text found in the document.")
+
+        # Ingest the dynamically extracted text in the background
+        def do_dynamic_ingest():
+            print(f"[CarbonGate] Ingesting newly uploaded document: {filename}")
+            ingest_documents([extracted_text], source_id=f"upload_{uuid4().hex}")
+
+        background_tasks.add_task(do_dynamic_ingest)
+
+        return {
+            "status": "success",
+            "message": f"Document '{filename}' uploaded successfully and is being ingested.",
+            "estimated_length": len(extracted_text)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[CarbonGate] Upload error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(

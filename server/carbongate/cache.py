@@ -55,14 +55,20 @@ def cache_lookup(query: str) -> Optional[dict]:
         similarity = 1.0 - distance
         if similarity >= CACHE_THRESHOLD:
             meta = results["metadatas"][0][0]
+            def optional_float(value):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
             return {
                 "hit": True,
                 "similarity": round(similarity, 4),
                 "cached_query": results["documents"][0][0],
                 "answer": meta.get("answer", ""),
                 "model": meta.get("model", "cached"),
-                "original_energy_wh": float(meta.get("energy_wh", 0)),
-                "original_carbon_g": float(meta.get("carbon_g", 0)),
+                "original_energy_wh": optional_float(meta.get("energy_wh")),
+                "original_carbon_g": optional_float(meta.get("carbon_g")),
             }
     except Exception as e:
         print(f"[Cache] Lookup error: {e}")
@@ -99,6 +105,7 @@ def cache_clear():
     """Clear all cache entries."""
     global _client, _collection
     import chromadb
+    from carbongate.embeddings import net_zero_embedding_fn
     _client = chromadb.PersistentClient(path=CHROMA_PATH)
     try:
         _client.delete_collection(CACHE_COLLECTION)
@@ -106,5 +113,6 @@ def cache_clear():
         pass
     _collection = _client.get_or_create_collection(
         name=CACHE_COLLECTION,
+        embedding_function=net_zero_embedding_fn,
         metadata={"hnsw:space": "cosine"},
     )

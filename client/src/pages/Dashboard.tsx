@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   Zap, Wind, Activity, TrendingDown, Database,
-  RefreshCw, Cpu, Shield, Clock, Play
+  RefreshCw, Cpu, Shield, Clock
 } from 'lucide-react';
 import { api } from '../api/carbongate';
 import './Dashboard.css';
@@ -49,7 +49,10 @@ function StatCard({
   );
 }
 
-function GridIntensityBar({ value }: { value: number }) {
+function GridIntensityBar({ value }: { value: number | null }) {
+  if (value === null) {
+    return <div className="grid-intensity-widget" style={{ color: 'var(--text-muted)' }}>Live grid carbon data is unavailable. Configure Electricity Maps to enable it.</div>;
+  }
   const max = 900;
   const pct = Math.min((value / max) * 100, 100);
   const color = value < 400 ? 'progress-green' : value < 600 ? 'progress-yellow' : value < 750 ? 'progress-orange' : 'progress-red';
@@ -107,7 +110,6 @@ export default function Dashboard() {
   const [allBudgets, setAllBudgets] = useState<any>({});
   const [grid, setGrid] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [simulating, setSimulating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
@@ -143,15 +145,6 @@ export default function Dashboard() {
   const handleRefresh = async () => {
     setRefreshing(true);
     await load();
-  };
-
-  const handleSimulate = async () => {
-    setSimulating(true);
-    await api.simulateLoad(10);
-    setTimeout(async () => {
-      await load();
-      setSimulating(false);
-    }, 8000);
   };
 
   // Build model distribution pie data
@@ -199,23 +192,8 @@ export default function Dashboard() {
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSimulate}
-            disabled={simulating}
-          >
-            <Play size={15} className={simulating ? 'animate-pulse-green' : ''} />
-            {simulating ? 'Running Demo...' : 'Run Demo Queries'}
-          </button>
         </div>
       </div>
-
-      {simulating && (
-        <div className="demo-banner">
-          <Activity size={16} className="animate-pulse-green" />
-          Simulating 10 demo queries through the CarbonGate pipeline... Results will appear in ~8 seconds.
-        </div>
-      )}
 
       {/* Grid Intensity Banner */}
       {grid && (
@@ -387,7 +365,7 @@ export default function Dashboard() {
         <div className="card">
           <div className="chart-header" style={{ marginBottom: '1rem' }}>
             <h3>24h Carbon Intensity Forecast</h3>
-            <span className="badge badge-teal">Simulated India Grid</span>
+            <span className="badge badge-teal">{grid.source || 'Live provider'}</span>
           </div>
           <ResponsiveContainer width="100%" height={160}>
             <BarChart data={grid.forecast.slice(0, 24)} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>

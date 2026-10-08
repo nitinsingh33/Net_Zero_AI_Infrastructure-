@@ -1,6 +1,6 @@
 // CarbonGate — API Client
 
-const BASE_URL = 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 async function apiCall<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -75,7 +75,12 @@ export const api = {
   ragStats: () => apiCall<any>('/api/rag/stats'),
   ragReingest: () => apiCall<any>('/api/rag/reingest', { method: 'POST' }),
 
-  // Demo
-  simulateLoad: (count = 10) =>
-    apiCall<any>(`/api/demo/simulate-load?requests_count=${count}`, { method: 'POST' }),
+  ragUpload: async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await fetch(`${BASE_URL}/api/rag/upload`, { method: 'POST', body: form });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  },
+
 };
