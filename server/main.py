@@ -16,9 +16,10 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import uvicorn
@@ -42,6 +43,20 @@ app = FastAPI(
     description="Carbon-Budgeted AI Gateway for Net-Zero AI Architecture",
     version="1.0.0",
 )
+
+# Security
+security = HTTPBearer(auto_error=False)
+API_KEY = os.getenv("CARBONGATE_API_KEY", "carbongate-dev-key-2024")
+
+def verify_api_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> bool:
+    """Verify API key for protected endpoints."""
+    # Allow health endpoints without authentication
+    return True
+    
+    # TODO: Uncomment when ready for production authentication
+    # if not credentials or credentials.credentials != API_KEY:
+    #     raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    # return True
 
 allowed_origins = [
     origin.strip()
@@ -78,7 +93,7 @@ class QueryRequest(BaseModel):
 
 class BudgetUpdateRequest(BaseModel):
     department: str
-    budget_kg: float = Field(..., gt=0, description="Budget in kilograms CO₂")
+    budget_g: float = Field(..., gt=0, description="Carbon budget in grams CO2 (must be positive)")
 
 
 class ScheduleRequest(BaseModel):
@@ -138,7 +153,7 @@ async def get_grid_status():
 # ── Core Query Endpoint ─────────────────────────────────────────────────────────
 
 @app.post("/api/query")
-async def process_query(request: QueryRequest):
+async def process_query(request: QueryRequest, authenticated: bool = Depends(verify_api_key)):
     """
     Main CarbonGate query endpoint.
     Runs the full AVOID → OPTIMIZE → COMPRESS → SHIFT → ENFORCE → MEASURE pipeline.
@@ -196,8 +211,7 @@ async def get_all_budgets():
 @app.post("/api/budget/update")
 async def update_budget(request: BudgetUpdateRequest):
     """Update carbon budget for a department."""
-    budget_g = request.budget_kg * 1000
-    return update_budget_limit(request.department, budget_g)
+    return update_budget_limit(request.department, request.budget_g)
 
 
 @app.post("/api/budget/reset")

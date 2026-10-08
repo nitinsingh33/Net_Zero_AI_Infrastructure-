@@ -29,13 +29,19 @@ _collection = None
 def _get_rag_collection():
     global _client, _collection
     if _collection is None:
-        from carbongate.embeddings import net_zero_embedding_fn
-        _client = chromadb.PersistentClient(path=CHROMA_RAG_PATH)
-        _collection = _client.get_or_create_collection(
-            name=RAG_COLLECTION,
-            embedding_function=net_zero_embedding_fn,
-            metadata={"hnsw:space": "cosine"},
-        )
+        try:
+            from carbongate.embeddings import net_zero_embedding_fn
+            import os
+            os.makedirs(CHROMA_RAG_PATH, exist_ok=True)
+            _client = chromadb.PersistentClient(path=CHROMA_RAG_PATH)
+            _collection = _client.get_or_create_collection(
+                name=RAG_COLLECTION,
+                embedding_function=net_zero_embedding_fn,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception as e:
+            _collection = None
+            raise RuntimeError(f"[CarbonGate] ChromaDB RAG collection initialization failed: {e}") from e
     return _collection
 
 

@@ -19,7 +19,9 @@ def _get_collection():
     global _client, _collection
     if _collection is None:
         import chromadb
+        import os
         from carbongate.embeddings import net_zero_embedding_fn
+        os.makedirs(CHROMA_PATH, exist_ok=True)
         _client = chromadb.PersistentClient(path=CHROMA_PATH)
         _collection = _client.get_or_create_collection(
             name=CACHE_COLLECTION,
